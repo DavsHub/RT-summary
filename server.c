@@ -45,7 +45,7 @@ void configure_sigusr2_handler() {
     hand.sa_mask = mask;
     hand.sa_flags = 0;
     hand.sa_handler = sigusr2_handler;
-    sigaction(SIGINT, &hand, NULL);
+    sigaction(SIGUSR2, &hand, NULL);
 }
 
 int create_listening_socket(int port) {
@@ -148,7 +148,8 @@ int main(int argc, char** argv) {
     socklen_t const addr_len = sizeof(sa_r);
     while(1) {
         int fd_in = accept(socket_in, (struct sockaddr*) &sa_r, &addr_len);
-        int fd_out = accept(socket_out, (struct sockaddr*) &sa_r, &addr_len);
+        // aqui crear el thread para leer el nombre
+        //int fd_out = accept(socket_out, (struct sockaddr*) &sa_r, &addr_len);
     }
     
     while (running){
