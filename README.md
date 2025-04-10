@@ -2,8 +2,8 @@
 Summary para la asignatura RT
 
 
-Enunciado:
-Summary: CHATin - 10/04/2025
+Enunciado:\
+Summary: CHATin - 10/04/2025\
 Queremos implementar un servicio de chat (aunque no muy relacionado con RT, si que es útil para
 repasar todos los servicios del sistema operativo explicados hasta ahora). El servicio está compuesto por
 2 componentes: un servidor y un cliente.
