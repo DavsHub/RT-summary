@@ -6,7 +6,7 @@ Enunciado:\
 # Summary: CHATin - 10/04/2025
 Queremos implementar un servicio de chat (aunque no muy relacionado con RT, si que es útil para
 repasar todos los servicios del sistema operativo explicados hasta ahora). El servicio está compuesto por
-2 componentes: un servidor y un cliente.\
+2 componentes: un servidor y un cliente.
 ## **Cliente**
 Un cliente se conectará a un servidor de chat indicando, en la línea de comandos, el nombre de usuario
 y los puertos (uno de envió de mensajes y otro de recepción de mensajes) a los que se tiene que
@@ -20,7 +20,7 @@ el principio de su ejecución si no ha habido un ‘\n’ anterior).\
 El thread de lectura se conectará mediante un socket al puerto serverip:port-out, enviará el username
 para que el server sepa que se refiere al mismo cliente y entrará en un bucle donde lo único que hará
 será leer mensajes y mostrarlos por pantalla.\
-El cliente acabará cuando reciba el signal SIGUSR1.\
+El cliente acabará cuando reciba el signal SIGUSR1.
 ## **Servidor**
 El servidor siempre se ejecutará pasándole el port-in y port-out donde recibirá y enviará mensajes:
 \> server port-in port-out\
@@ -35,9 +35,9 @@ mensaje por parte del cliente, del cual atienden peticiones, y reenvían este me
 cliente acabe la comunicación, el thread marcará que este cliente se ha desconectado y acabará.
 Ten en cuenta que este vector global donde guardas la información de los clientes tiene que accederse
 en exclusión mutua.\
-El server acabará cuando reciba el signal SIGUSR2.\\
+El server acabará cuando reciba el signal SIGUSR2.
 
-A tener en cuenta:\
+A tener en cuenta:
 - los mensajes que se envían siempre son mensajes de texto que no tienen longitud máxima. Por esta
 razón, para enviar cualquier mensaje de texto (el username o un mensaje de texto) se tiene que enviar
 siempre la longitud, en caracteres, de este mensaje antes del propio mensaje. Además, para evitar
