@@ -3,11 +3,11 @@ Summary para la asignatura RT
 
 
 Enunciado:\
-# Summary: CHATin - 10/04/2025\
+# Summary: CHATin - 10/04/2025
 Queremos implementar un servicio de chat (aunque no muy relacionado con RT, si que es útil para
 repasar todos los servicios del sistema operativo explicados hasta ahora). El servicio está compuesto por
-2 componentes: un servidor y un cliente.\\
-Cliente
+2 componentes: un servidor y un cliente.\
+## **Cliente**
 Un cliente se conectará a un servidor de chat indicando, en la línea de comandos, el nombre de usuario
 y los puertos (uno de envió de mensajes y otro de recepción de mensajes) a los que se tiene que
 conectar:\
@@ -20,8 +20,8 @@ el principio de su ejecución si no ha habido un ‘\n’ anterior).\
 El thread de lectura se conectará mediante un socket al puerto serverip:port-out, enviará el username
 para que el server sepa que se refiere al mismo cliente y entrará en un bucle donde lo único que hará
 será leer mensajes y mostrarlos por pantalla.\
-El cliente acabará cuando reciba el signal SIGUSR1.\\
-Servidor\
+El cliente acabará cuando reciba el signal SIGUSR1.\
+## **Servidor**
 El servidor siempre se ejecutará pasándole el port-in y port-out donde recibirá y enviará mensajes:
 \> server port-in port-out\
 Cuando el server se ejecute, tendrá un único thread que abra los dos puertos (port-in, port-out) y se
