@@ -11,7 +11,7 @@ Cliente
 Un cliente se conectará a un servidor de chat indicando, en la línea de comandos, el nombre de usuario
 y los puertos (uno de envió de mensajes y otro de recepción de mensajes) a los que se tiene que
 conectar:
-> client username serverip port-in port-out
+\> client username serverip port-in port-out
 El cliente, al ejecutarse, creará dos threads, uno para escribir mensajes y otro para leerlos. El thread que
 escribe mensajes, es el que se conectará a serverip:port-in y, al inicio de la conexión, enviará el
 username al servidor. Después entrará en un bucle donde leerá, mediante getchar(), caracteres del
@@ -23,7 +23,7 @@ será leer mensajes y mostrarlos por pantalla.
 El cliente acabará cuando reciba el signal SIGUSR1.
 Servidor
 El servidor siempre se ejecutará pasándole el port-in y port-out donde recibirá y enviará mensajes:
-> server port-in port-out
+\> server port-in port-out
 Cuando el server se ejecute, tendrá un único thread que abra los dos puertos (port-in, port-out) y se
 espere a que los clientes se conecten. Cuando un cliente se conecte, guardará en un vector global al
 proceso, los file descriptors de las conexiones de ese cliente, junto con el username que le envía el
@@ -36,7 +36,7 @@ cliente acabe la comunicación, el thread marcará que este cliente se ha descon
 Ten en cuenta que este vector global donde guardas la información de los clientes tiene que accederse
 en exclusión mutua.
 El server acabará cuando reciba el signal SIGUSR2.
-1
+
 A tener en cuenta:
 - los mensajes que se envían siempre son mensajes de texto que no tienen longitud máxima. Por esta
 razón, para enviar cualquier mensaje de texto (el username o un mensaje de texto) se tiene que enviar
