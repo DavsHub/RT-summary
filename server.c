@@ -26,7 +26,14 @@
 #define SEM "/chat_sem"
 
 
-int clients_fd[MAX_CLIENTS];  
+
+typedef struct{
+    char username[BUFFER];
+    int fd_in;
+    int fd_out;
+}client_t; 
+
+client_t clientes[MAX_CLIENTS];
 sem_t* sem;
 int running = 1;
 
@@ -143,9 +150,6 @@ int main(int argc, char** argv) {
         int fd_in = accept(socket_in, (struct sockaddr*) &sa_r, &addr_len);
         int fd_out = accept(socket_out, (struct sockaddr*) &sa_r, &addr_len);
     }
-
-    
-
     
     while (running){
         char uname[BUFFER],in_pipe[BUFFER],out_pipe[BUFFER];
