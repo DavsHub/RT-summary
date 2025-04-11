@@ -12,13 +12,16 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
-#include <fcntl.h>
 #include <sys/mman.h>
 #include <semaphore.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+
+
 #include <arpa/inet.h>
+#include <poll.h>
+#include <fcntl.h>
 
 #define MAX_CLIENTS 100
 #define BUFFER 1024
@@ -144,12 +147,23 @@ int main(int argc, char** argv) {
     int socket_in = create_listening_socket(atoi(argv[1]));
     int socket_out = create_listening_socket(atoi(argv[2]));
 
+    struct pollfd fds[2];
+
+    fds[0].fd = socket_in;
+    fds[0].events = POLLIN;
+    fds[1].fd = socket_out;
+    fds[1].events = POLLIN;
+
+    fcntl(socket_in, F_SETFL, O_NONBLOCK);
+    fcntl(socket_out, F_SETFL, O_NONBLOCK);
+
     struct sockaddr_in sa_r;
-    socklen_t const addr_len = sizeof(sa_r);
+    socklen_t addr_len = sizeof(sa_r);
     while(1) {
-        int fd_in = accept(socket_in, (struct sockaddr*) &sa_r, &addr_len);
-        // aqui crear el thread para leer el nombre
-        //int fd_out = accept(socket_out, (struct sockaddr*) &sa_r, &addr_len);
+        if (poll(fds,2,-1)>0) {
+            int fd_in = accept(socket_in, (struct sockaddr*) &sa_r, &addr_len);
+            int fd_out = accept(socket_out, (struct sockaddr*) &sa_r, &addr_len);
+        }
     }
     
     while (running){
