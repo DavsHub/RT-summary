@@ -7,11 +7,12 @@
  */
 
 #include <stdio.h>
+
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <signal.h>
+
 #include <sys/mman.h>
 #include <semaphore.h>
 #include <sys/wait.h>
@@ -22,6 +23,8 @@
 #include <arpa/inet.h>
 #include <poll.h>
 #include <fcntl.h>
+#include <sys/socket.h>
+#include <signal.h>
 
 #define MAX_CLIENTS 100
 #define BUFFER 1024
@@ -31,12 +34,14 @@
 
 
 typedef struct{
+    pthread_t id;
     char username[BUFFER];
     int fd_in;
     int fd_out;
 }client_t; 
 
 client_t clientes[MAX_CLIENTS];
+int n_clients=0;
 sem_t* sem;
 int running = 1;
 
@@ -87,6 +92,55 @@ int create_listening_socket(int port) {
 
 void sigusr2_handler(int sig){
     running=0; // RECIBIR SIGURS2 === DEJAR DE ACEPTAR CLIENTES
+}
+
+int find_username(char * username) {
+    int p = -1;
+    for (int i = 0; i<MAX_CLIENTS; i++) {
+        if (strcmp(clientes[i].username,username)==0) {
+            p=i;
+            break;
+        }
+    }
+    return p;
+}
+
+int recv_username(int fd, char * username, int timeout) {
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    int char_len;
+    if (poll(&pfd,1,timeout)>0) {
+        if (read(fd, &char_len, sizeof(char_len)) == -1) return -1;
+    } else return -1;
+
+    if (char_len<=0 || char_len >BUFFER) return -1;
+
+    if (poll(&pfd,1,timeout)>0) {
+        read(fd, username, sizeof(char)*char_len);
+    } else return -1;
+    return 0;
+}
+
+void handle_socket_connection(int fd, int is_recv) {
+    char username[BUFFER];
+    if (recv_username(fd, username,1000) == -1) return;
+
+    int p = find_username(username);
+    if (p==-1 && n_clients<MAX_CLIENTS) {
+        client_t * cl = &clientes[n_clients];
+        strcpy(cl->username, username);
+        if (is_recv) cl->fd_in = fd;
+        else cl->fd_out = fd;
+        pthread_create(&cl->id,NULL,handle_client, n_clients);
+        n_clients++;
+    } else if (p >= 0){
+        if (is_recv) clientes[p].fd_in = fd;
+        else clientes[p].fd_out = fd;
+        
+    } else {
+        fprintf(stderr, "Se ha alcanzado el número máximo de clientes\n");
+    }
 }
 
 void send_message(int sender_index, const char* msg, int len){
@@ -144,6 +198,8 @@ int main(int argc, char** argv) {
     }
     
     configure_sigusr2_handler();
+
+    
     int socket_in = create_listening_socket(atoi(argv[1]));
     int socket_out = create_listening_socket(atoi(argv[2]));
 
@@ -154,15 +210,19 @@ int main(int argc, char** argv) {
     fds[1].fd = socket_out;
     fds[1].events = POLLIN;
 
-    fcntl(socket_in, F_SETFL, O_NONBLOCK);
-    fcntl(socket_out, F_SETFL, O_NONBLOCK);
+    //fcntl(socket_in, F_SETFL, O_NONBLOCK);
+    //fcntl(socket_out, F_SETFL, O_NONBLOCK);
 
     struct sockaddr_in sa_r;
     socklen_t addr_len = sizeof(sa_r);
     while(1) {
         if (poll(fds,2,-1)>0) {
             int fd_in = accept(socket_in, (struct sockaddr*) &sa_r, &addr_len);
+            if (fd_in >= 0) handle_socket_connection(fd_in,1);
+
             int fd_out = accept(socket_out, (struct sockaddr*) &sa_r, &addr_len);
+            if (fd_out >= 0) handle_socket_connection(fd_out,0);
+
         }
     }
     
