@@ -45,16 +45,9 @@ int n_clients=0;
 pthread_mutex_t clientes_mutex;
 int running = 1;
 
+void * handle_client(void * index);
+void sigusr2_handler(int sig);
 
-void configure_sigusr2_handler() {
-    struct sigaction hand;
-    sigset_t mask;
-    sigemptyset(&mask);
-    hand.sa_mask = mask;
-    hand.sa_flags = 0;
-    hand.sa_handler = sigusr2_handler;
-    sigaction(SIGUSR2, &hand, NULL);
-}
 
 int create_listening_socket(int port) {
     int sockfd;
@@ -92,6 +85,16 @@ int create_listening_socket(int port) {
 
 void sigusr2_handler(int sig){
     running=0; // RECIBIR SIGURS2 === DEJAR DE ACEPTAR CLIENTES
+}
+
+void configure_sigusr2_handler() {
+    struct sigaction hand;
+    sigset_t mask;
+    sigemptyset(&mask);
+    hand.sa_mask = mask;
+    hand.sa_flags = 0;
+    hand.sa_handler = sigusr2_handler;
+    sigaction(SIGUSR2, &hand, NULL);
 }
 
 int find_username(char * username) {
@@ -142,6 +145,7 @@ int valid_client(int p) {
 
 void handle_socket_connection(int fd, int is_recv) {
     char username[BUFFER];
+    if (is_recv) fcntl(fd, F_SETFL, O_NONBLOCK);
     if (read_msg(fd, username,1000) == -1) {
         perror("error en recepcion de usuario\n");
         close(fd);
@@ -162,7 +166,7 @@ void handle_socket_connection(int fd, int is_recv) {
         if (is_recv) clientes[p].fd_in = fd;
         else clientes[p].fd_out = fd;
         if (valid_client(p) ) {
-            pthread_create(&(clientes[p].id),NULL,handle_client, p);
+            pthread_create(&(clientes[p].id),NULL,handle_client, (void *) &clientes[p]);
         }
         pthread_mutex_unlock(&clientes_mutex);
     } else {
@@ -193,8 +197,9 @@ void broadcast_message(const char* msg, int length) {
 
 
 
-void handle_client(int index){
-    int fd_in = clientes[index].fd_in;
+void * handle_client(void * cl){
+
+    int fd_in = ((client_t *) cl)->fd_in;
     while (1){
         char msg[BUFFER];
         int msg_len = read_msg(fd_in, msg, -1);
@@ -229,10 +234,10 @@ int main(int argc, char** argv) {
     socklen_t addr_len = sizeof(sa_r);
     while(running) {
         if (poll(fds,2,-1)>0) {
-            int fd_in = accept4(socket_in, (struct sockaddr*) &sa_r, &addr_len, SOCK_NONBLOCK);
+            int fd_in = accept(socket_in, (struct sockaddr*) &sa_r, &addr_len);
             if (fd_in >= 0) handle_socket_connection(fd_in,1);
 
-            int fd_out = accept4(socket_out, (struct sockaddr*) &sa_r, &addr_len, SOCK_NONBLOCK);
+            int fd_out = accept(socket_out, (struct sockaddr*) &sa_r, &addr_len);
             if (fd_out >= 0) handle_socket_connection(fd_out,0);
 
         }
