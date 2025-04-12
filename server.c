@@ -42,7 +42,7 @@ typedef struct{
 
 client_t clientes[MAX_CLIENTS];
 int n_clients=0;
-sem_t* sem;
+pthread_mutex_t clientes_mutex;
 int running = 1;
 
 
@@ -116,7 +116,9 @@ int read_msg(int fd, char * text, int timeout) {
             int bytes_read = read(fd, ((char*)&msg_len) + (sizeof(msg_len) - bytes_rem), bytes_rem);
             if (bytes_read <= 0) return -1;
             bytes_rem -= bytes_read;
-        } else return -1;
+        } else {
+            return -1;
+        }
     }
 
     if (msg_len<=0 || msg_len >BUFFER) return -1;
@@ -127,94 +129,77 @@ int read_msg(int fd, char * text, int timeout) {
             int bytes_read = read(fd, text + (msg_len - bytes_rem), bytes_rem);
             if (bytes_read <= 0) return -1;
             bytes_rem -= bytes_read;
-        } else return -1;
+        } else {
+            return -1;
+        }
     }
-    return 0;
+    return msg_len;
 }
 
-int recv_username(int fd, char * username, int timeout) {
-    struct pollfd pfd;
-    pfd.fd = fd;
-    pfd.events = POLLIN;
-    int char_len;
-    if (poll(&pfd,1,timeout)>0) {
-        if (read(fd, &char_len, sizeof(char_len)) == -1) return -1;
-    } else return -1;
-
-    if (char_len<=0 || char_len >BUFFER) return -1;
-
-    if (poll(&pfd,1,timeout)>0) {
-        read(fd, username, sizeof(char)*char_len);
-    } else return -1;
-    return 0;
+int valid_client(int p) {
+    return clientes[p].fd_out > 0 && clientes[p].fd_in > 0 && clientes[p].username != NULL && clientes[p].id == 0;
 }
 
 void handle_socket_connection(int fd, int is_recv) {
     char username[BUFFER];
-    if (recv_username(fd, username,1000) == -1) return;
+    if (read_msg(fd, username,1000) == -1) {
+        perror("error en recepcion de usuario\n");
+        close(fd);
+        return;
+    }
 
     int p = find_username(username);
-    if (p==-1 && n_clients<MAX_CLIENTS) {
+    if (p==-1 && n_clients<MAX_CLIENTS) {  // new client
         client_t * cl = &clientes[n_clients];
+        pthread_mutex_lock(&clientes_mutex);
         strcpy(cl->username, username);
         if (is_recv) cl->fd_in = fd;
         else cl->fd_out = fd;
-        pthread_create(&cl->id,NULL,handle_client, n_clients);
+        pthread_mutex_unlock(&clientes_mutex);
         n_clients++;
-    } else if (p >= 0){
+    } else if (p >= 0){  //
+        pthread_mutex_lock(&clientes_mutex);
         if (is_recv) clientes[p].fd_in = fd;
         else clientes[p].fd_out = fd;
-        
+        if (valid_client(p) ) {
+            pthread_create(&(clientes[p].id),NULL,handle_client, p);
+        }
+        pthread_mutex_unlock(&clientes_mutex);
     } else {
         fprintf(stderr, "Se ha alcanzado el número máximo de clientes\n");
+        close(fd);
+        return;
     }
 }
 
-void send_message(int sender_index, const char* msg, int len){
-    // COGE EL MENSAJE DEL CLIENTE, Y MANDA EL MENSAJE A LOS
-    // OTROS CLIENTES; CON UN  SEMAFORO PROTEGE EL ACCESO AL VECTOR
-    // COMPARTIDO
-    sem_wait(sem);
+int send_msg(int fd, const char* msg, int length) {
+    char buffer[sizeof(int) + length];
+
+    memcpy(buffer, &length, sizeof(int));
+    memcpy(buffer + sizeof(int), msg, length);
+    int bytes_sent = send(fd, buffer, sizeof(int) + length, 0);
+}
+void broadcast_message(const char* msg, int length) {
+
+    pthread_mutex_lock(&clientes_mutex);
     for (int i=0;i<MAX_CLIENTS; i++){
-        if (clients[i].active && i != sender_index){
-            char full_msg[BUFFER];
-            int written = snprintf(full_msg, BUFFER, "%s: %.*s",clients[sender_index].username,len,msg);
-            if (written < 0 || written >= BUFFER){
-                fprintf(stderr, "Error en formato.\n");
-                continue;
+        if (clientes[i].id != 0){
+                send_msg(clientes[i].fd_out, msg, length);
             }
-          
-            write(clients[i].out_add,&written,sizeof(int));
-            write(clients[i].out_add,full_msg,written);
-        }
     }
-    sem_post(sem);
+    pthread_mutex_unlock(&clientes_mutex);
+
 }
 
 
 
 void handle_client(int index){
-    // COGE LOS MENSAJES DEL CLIENTE Y LOS REENVIA, 
-    // CUANDO TERMINA DESCONECTA EL CLIENTE,
-    // CIERRA LOS PIPES Y FINALIZA EL PROCESO HIJO
-    int fd = clients[index].in_add;
-    int len;
-    char msg[BUFFER];
-    while (read(fd,&len,sizeof(int))>0){
-        if (read(fd,msg,len)<=0) break;
-        msg[len] = '\0';
-        send_message(index,msg,len);
+    int fd_in = clientes[index].fd_in;
+    while (1){
+        char msg[BUFFER];
+        int msg_len = read_msg(fd_in, msg, -1);
+        broadcast_message(msg,msg_len);
     }
-    
-    sem_wait(sem);
-    clients[index].active=0;
-    sem_post(sem);
-    
-    close(clients[index].in_add);
-    close(clients[index].out_add);
-    unlink(clients[index].in_pipe);
-    unlink(clients[index].out_pipe);
-    exit(0);
 }
 
 int main(int argc, char** argv) {
@@ -242,46 +227,22 @@ int main(int argc, char** argv) {
 
     struct sockaddr_in sa_r;
     socklen_t addr_len = sizeof(sa_r);
-    while(1) {
+    while(running) {
         if (poll(fds,2,-1)>0) {
-            int fd_in = accept(socket_in, (struct sockaddr*) &sa_r, &addr_len);
+            int fd_in = accept4(socket_in, (struct sockaddr*) &sa_r, &addr_len, SOCK_NONBLOCK);
             if (fd_in >= 0) handle_socket_connection(fd_in,1);
 
-            int fd_out = accept(socket_out, (struct sockaddr*) &sa_r, &addr_len);
+            int fd_out = accept4(socket_out, (struct sockaddr*) &sa_r, &addr_len, SOCK_NONBLOCK);
             if (fd_out >= 0) handle_socket_connection(fd_out,0);
 
         }
     }
-    
-    while (running){
-        char uname[BUFFER],in_pipe[BUFFER],out_pipe[BUFFER];
-        scanf("%s %s %s",uname,in_pipe,out_pipe);
-        int in_add=open(in_pipe, O_RDONLY);
-        int out_add=open(out_pipe, O_WRONLY);
-        if (in_add < 0 || out_add < 0) continue;
-        
-        int index =-1;
-        sem_wait(sem);
-        for (int i=0; i<MAX_CLIENTS; ++i){
-            if (!clients[i].active){
-                clients[i].in_add = in_add;
-                clients[i].out_add = out_add;
-                strcpy(clients[i].username,uname);
-                strcpy(clients[i].in_pipe,in_pipe);
-                strcpy(clients[i].out_pipe,out_pipe);
-                clients[i].active=1;
-                index=1;
-                break;
-            }
-        }
-        sem_post(sem);
-        if (index != -1 && fork()== 0){
-            handle_client(index);
-        }
+    close(socket_in);
+    close(socket_out);
+    for (int i=0;i<MAX_CLIENTS; i++){
+        if (clientes[i].fd_in>0) close(clientes[i].fd_in);
+        if (clientes[i].fd_out>0) close(clientes[i].fd_out);
     }
-    shm_unlink(SHM);
-    sem_unlink(SEM);
-
     return (EXIT_SUCCESS);
 }
 
