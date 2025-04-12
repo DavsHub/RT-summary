@@ -105,6 +105,33 @@ int find_username(char * username) {
     return p;
 }
 
+int read_msg(int fd, char * text, int timeout) {
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    int msg_len;
+    int bytes_rem = sizeof(msg_len);
+    while (bytes_rem>0){
+        if (poll(&pfd,1,timeout)>0) {
+            int bytes_read = read(fd, ((char*)&msg_len) + (sizeof(msg_len) - bytes_rem), bytes_rem);
+            if (bytes_read <= 0) return -1;
+            bytes_rem -= bytes_read;
+        } else return -1;
+    }
+
+    if (msg_len<=0 || msg_len >BUFFER) return -1;
+
+    bytes_rem = msg_len;
+    while (bytes_rem>0){
+        if (poll(&pfd,1,timeout)>0) {
+            int bytes_read = read(fd, text + (msg_len - bytes_rem), bytes_rem);
+            if (bytes_read <= 0) return -1;
+            bytes_rem -= bytes_read;
+        } else return -1;
+    }
+    return 0;
+}
+
 int recv_username(int fd, char * username, int timeout) {
     struct pollfd pfd;
     pfd.fd = fd;
@@ -210,8 +237,8 @@ int main(int argc, char** argv) {
     fds[1].fd = socket_out;
     fds[1].events = POLLIN;
 
-    //fcntl(socket_in, F_SETFL, O_NONBLOCK);
-    //fcntl(socket_out, F_SETFL, O_NONBLOCK);
+    fcntl(socket_in, F_SETFL, O_NONBLOCK);
+    fcntl(socket_out, F_SETFL, O_NONBLOCK);
 
     struct sockaddr_in sa_r;
     socklen_t addr_len = sizeof(sa_r);
