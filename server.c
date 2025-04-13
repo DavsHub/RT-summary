@@ -11,11 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <pthread.h>
 
-#include <sys/mman.h>
-#include <semaphore.h>
-#include <sys/wait.h>
+
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -25,12 +22,10 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <signal.h>
+#include <pthread.h>
 
 #define MAX_CLIENTS 100
 #define BUFFER 1024
-#define SHM "/chat_shm"
-#define SEM "/chat_sem"
-
 
 
 typedef struct{
@@ -123,7 +118,7 @@ int read_msg(int fd, char * text, int timeout) {
             return -1;
         }
     }
-
+    msg_len = ntohl(msg_len);
     if (msg_len<=0 || msg_len >BUFFER) return -1;
 
     bytes_rem = msg_len;
@@ -139,13 +134,13 @@ int read_msg(int fd, char * text, int timeout) {
     return msg_len;
 }
 
-int valid_client(int p) {
+int ready_client(int p) {
     return clientes[p].fd_out > 0 && clientes[p].fd_in > 0 && clientes[p].username != NULL && clientes[p].id == 0;
 }
 
 void handle_socket_connection(int fd, int is_recv) {
     char username[BUFFER];
-    if (is_recv) fcntl(fd, F_SETFL, O_NONBLOCK);
+
     if (read_msg(fd, username,1000) == -1) {
         perror("error en recepcion de usuario\n");
         close(fd);
@@ -161,11 +156,11 @@ void handle_socket_connection(int fd, int is_recv) {
         else cl->fd_out = fd;
         pthread_mutex_unlock(&clientes_mutex);
         n_clients++;
-    } else if (p >= 0){  //
+    } else if (p >= 0){  // add socket to existing client
         pthread_mutex_lock(&clientes_mutex);
         if (is_recv) clientes[p].fd_in = fd;
         else clientes[p].fd_out = fd;
-        if (valid_client(p) ) {
+        if (ready_client(p) ) {
             pthread_create(&(clientes[p].id),NULL,handle_client, (void *) &clientes[p]);
         }
         pthread_mutex_unlock(&clientes_mutex);
@@ -179,9 +174,14 @@ void handle_socket_connection(int fd, int is_recv) {
 int send_msg(int fd, const char* msg, int length) {
     char buffer[sizeof(int) + length];
 
-    memcpy(buffer, &length, sizeof(int));
+    int net_length = htonl(length);  // Convert to network byte order
+    memcpy(buffer, &net_length, sizeof(int));
     memcpy(buffer + sizeof(int), msg, length);
     int bytes_sent = send(fd, buffer, sizeof(int) + length, 0);
+    if (bytes_sent != length+sizeof(int)) {
+        fprintf(stderr, "No se ha podido enviar el mensaje atómicamente\n");
+    }
+    return bytes_sent;
 }
 void broadcast_message(const char* msg, int length) {
 
@@ -195,15 +195,13 @@ void broadcast_message(const char* msg, int length) {
 
 }
 
-
-
 void * handle_client(void * cl){
-
+    printf("Nuevo cliente\n");
     int fd_in = ((client_t *) cl)->fd_in;
     while (1){
         char msg[BUFFER];
         int msg_len = read_msg(fd_in, msg, -1);
-        broadcast_message(msg,msg_len);
+        if (msg_len>0) broadcast_message(msg,msg_len);
     }
 }
 
@@ -242,6 +240,7 @@ int main(int argc, char** argv) {
 
         }
     }
+    printf("Cerrando servidor\n");
     close(socket_in);
     close(socket_out);
     for (int i=0;i<MAX_CLIENTS; i++){

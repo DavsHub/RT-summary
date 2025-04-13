@@ -6,7 +6,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-
+#include <arpa/inet.h>
 #define BUFFER 1024
 
 int in_add, out_add;
@@ -16,10 +16,44 @@ void sigusr1_handler(int sig){
     running=0;
 }
 
-void send_with_len(int fd, const char* msg){
-    int len = strlen(msg);
-    write(fd,&len,sizeof(int));
-    write(fd,msg,len);
+void configure_sigusr1_handler() {
+    struct sigaction hand;
+    sigset_t mask;
+    sigemptyset(&mask);
+    hand.sa_mask = mask;
+    hand.sa_flags = 0;
+    hand.sa_handler = sigusr1_handler;
+    sigaction(SIGUSR1, &hand, NULL);
+}
+
+int connect_socket(struct sockaddr_in * sa, char* username) {
+    int sfd = socket(AF_INET, SOCK_STREAM, 0); //tcp socket
+    if (sfd < 0) {
+        perror("Error creating socket");
+        return -1;
+    }
+    if(connect(sfd, (struct sockaddr*) sa, sizeof(sa))<0) {
+        perror("Error connecting");
+        return -1;
+    }
+
+    send_msg(sfd,username, strlen(username));
+
+    return sfd;
+}
+
+int send_msg(int fd, const char* msg, int length) {
+    char buffer[sizeof(int) + length];
+
+    int net_length = htonl(length);  // Convert to network byte order
+    memcpy(buffer, &net_length, sizeof(int));
+    memcpy(buffer + sizeof(int), msg, length);
+    int bytes_sent = send(fd, buffer, sizeof(int) + length, 0);
+    if (bytes_sent != length+sizeof(int)) {
+        fprintf(stderr, "No se ha podido enviar el mensaje atómicamente\n");
+        return -1;
+    }
+    return bytes_sent;
 }
 
 void* reader(void* arg){
@@ -44,37 +78,26 @@ void* writer(void* arg){
 }
 
 int main(int argc, char* argv[]){
-    if (argc != 2){
-        fprintf(stderr, "Uso: %s username\n", argv[0]);
-        return 1;
+    if (argc != 5){
+        fprintf(stderr, "Usage: %s <username> <server-ip> <port-in> <port-out>\n", argv[0]);
+        exit(EXIT_FAILURE);
     }
     
-    signal(SIGUSR1, sigusr1_handler);
-    
-    char in_pipe[BUFFER], out_pipe[BUFFER];
-    snprintf(in_pipe, sizeof(in_pipe),"/tmp/%s-in",argv[1]);
-    snprintf(out_pipe, sizeof(out_pipe),"/tmp/%s-out",argv[1]);
-    
-    mkfifo(in_pipe,0666);
-    mkfifo(out_pipe,0666);
+    configure_sigusr1_handler();
 
-    printf("%s %s %s\n",argv[1], in_pipe, out_pipe);
-    fflush(stdout);
-    
-    in_add = open(in_pipe,O_WRONLY);
-    out_add = open(out_pipe,O_RDONLY);
-    
-    pthread_t t_read, t_write;
-    pthread_create(&t_read, NULL, reader, NULL);
-    pthread_create(&t_write, NULL, writer, NULL);
-    
-    pthread_join(t_read, NULL);
-    pthread_join(t_write, NULL);
-    
-    close(in_add);
-    close(out_add);
-    unlink(in_pipe);
-    unlink(out_pipe);
+    struct sockaddr_in sa_r; // IPv4
+    memset(&sa_r, 0, sizeof(sa_r));
+
+
+    inet_pton(AF_INET, argv[2], &(sa_r.sin_addr));
+    sa_r.sin_family = AF_INET;
+    sa_r.sin_port = htons(atoi(argv[3]));
+
+    int socket_in = connect_socket(&sa_r, argv[1]);
+
+    sa_r.sin_port = htons(atoi(argv[4]));
+    int socket_out = connect_socket(&sa_r, argv[1]);
+
     return 0;
 
 }
