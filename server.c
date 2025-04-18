@@ -110,10 +110,12 @@ int read_msg(int fd, char * text, int timeout) {
     int msg_len;
     int bytes_rem = sizeof(msg_len);
     while (bytes_rem>0){
+        //printf("waiting message\n");
         if (poll(&pfd,1,timeout)>0) {
             int bytes_read = read(fd, ((char*)&msg_len) + (sizeof(msg_len) - bytes_rem), bytes_rem);
-            if (bytes_read <= 0) return -1;
+            if (bytes_read <= 0) return bytes_read;
             bytes_rem -= bytes_read;
+            //printf("received %d bytes\n", bytes_read);
         } else {
             return -1;
         }
@@ -125,7 +127,7 @@ int read_msg(int fd, char * text, int timeout) {
     while (bytes_rem>0){
         if (poll(&pfd,1,timeout)>0) {
             int bytes_read = read(fd, text + (msg_len - bytes_rem), bytes_rem);
-            if (bytes_read <= 0) return -1;
+            if (bytes_read <= 0) return bytes_read;
             bytes_rem -= bytes_read;
         } else {
             return -1;
@@ -140,12 +142,13 @@ int ready_client(int p) {
 
 void handle_socket_connection(int fd, int is_recv) {
     char username[BUFFER];
-
-    if (read_msg(fd, username,1000) == -1) {
+    int length = read_msg(fd, username,1000);
+    if ( length == -1) {
         perror("error en recepcion de usuario\n");
         close(fd);
         return;
     }
+    username[length] = '\0';
 
     int p = find_username(username);
     if (p==-1 && n_clients<MAX_CLIENTS) {  // new client
@@ -179,15 +182,16 @@ int send_msg(int fd, const char* msg, int length) {
     memcpy(buffer + sizeof(int), msg, length);
     int bytes_sent = send(fd, buffer, sizeof(int) + length, 0);
     if (bytes_sent != length+sizeof(int)) {
-        fprintf(stderr, "No se ha podido enviar el mensaje atómicamente\n");
+        perror("No se ha podido enviar el mensaje atómicamente\n");
     }
     return bytes_sent;
 }
-void broadcast_message(const char* msg, int length) {
+void broadcast_message(client_t* orig, const char* msg, int length) {
+
 
     pthread_mutex_lock(&clientes_mutex);
     for (int i=0;i<MAX_CLIENTS; i++){
-        if (clientes[i].id != 0){
+        if (clientes[i].id != 0 && &clientes[i] != orig){
                 send_msg(clientes[i].fd_out, msg, length);
             }
     }
@@ -195,14 +199,35 @@ void broadcast_message(const char* msg, int length) {
 
 }
 
-void * handle_client(void * cl){
-    printf("Nuevo cliente\n");
+void close_client(client_t * cl){
+    printf("%s se desconecta\n", cl->username);
+    pthread_mutex_lock(&clientes_mutex);
+    if (cl->fd_in>0) close(cl->fd_in);
+    if (cl->fd_out>0) close(cl->fd_out);
+    cl->username[0] = '\0';
+    cl->id = 0;
+    pthread_mutex_unlock(&clientes_mutex);
+}
+
+void * handle_client(void * arg){
+    client_t * cl = (client_t *) arg;
+    printf("Nuevo cliente: %s\n", cl->username);
     int fd_in = ((client_t *) cl)->fd_in;
-    while (1){
+    while (running){
         char msg[BUFFER];
         int msg_len = read_msg(fd_in, msg, -1);
-        if (msg_len>0) broadcast_message(msg,msg_len);
+        if (msg_len==0) {
+            close_client(cl);
+            pthread_exit(0);
+        }
+        if (msg_len>0) {
+            char msg2[2*BUFFER+1];
+            sprintf(msg2, "%s: %.*s", cl->username, msg_len, msg);
+            printf("%s\n",msg2);
+            broadcast_message(cl, msg2,strlen(msg2));
+        }
     }
+    pthread_exit(0);
 }
 
 int main(int argc, char** argv) {
@@ -213,11 +238,8 @@ int main(int argc, char** argv) {
     }
     
     configure_sigusr2_handler();
-
-    
     int socket_in = create_listening_socket(atoi(argv[1]));
     int socket_out = create_listening_socket(atoi(argv[2]));
-
     struct pollfd fds[2];
 
     fds[0].fd = socket_in;
