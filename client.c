@@ -14,6 +14,19 @@
 int in_add, out_add;
 int running = 1;
 
+typedef struct {
+    struct sockaddr_in sa;
+    char *  username;
+} info_con_t;
+
+void configure_info_con(info_con_t * info, char * username, char * ip, char * port) {
+    memset(&info->sa, 0, sizeof(info->sa));
+    inet_pton(AF_INET, ip, &(info->sa.sin_addr));
+    info->sa.sin_family = AF_INET;
+    info->sa.sin_port = htons(atoi(port));
+    info->username = username;
+}
+
 void sigusr1_handler(int sig){
     running=0;
 }
@@ -21,9 +34,6 @@ void sigusr1_handler(int sig){
 void configure_sigusr1_handler() {
     struct sigaction hand;
     sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGUSR1);
-    sigprocmask(SIG_SETMASK,&mask,NULL);
     sigemptyset(&mask);
     hand.sa_mask = mask;
     hand.sa_flags = 0;
@@ -92,8 +102,14 @@ int connect_socket(struct sockaddr_in * sa, char* username) {
     return sfd;
 }
 
-void * reading (void* arg) {
-    int socket = (int)(intptr_t) arg;
+void * recieve_thread (void* arg) {
+    info_con_t * info = (info_con_t*) arg;
+    int socket = connect_socket(&info->sa, info->username);
+    if (socket <0) {
+        kill(getpid(), SIGUSR1);
+        close(socket);
+        pthread_exit(0);
+    }
     while(running) {
         char msg[(2*BUFFER+1)];
         int length = read_msg(socket, msg, -1);
@@ -108,26 +124,31 @@ void * reading (void* arg) {
             write(1,"\nyou:", 6);
         }
     }
+    close(socket);
     pthread_exit(0);
 }
 
-void * sending (void* arg) {
-    int socket = (int)(intptr_t) arg;
+void * send_thread (void* arg) {
+    info_con_t * info = (info_con_t*) arg;
+    int socket = connect_socket(&info->sa, info->username);
+    
+    if (socket <0) {
+        kill(getpid(), SIGUSR1);
+        close(socket);
+        pthread_exit(0);
+    }
     char string[BUFFER];
     int length = 0;
     write(1,"you: ", 5);
     while(running) {
         string[length++] = getchar();
-        //printf("char read: %c (%d)\n", string[length-1], string[length-1]);
         if (string[length-1] == '\n' && length>1) {
-            //string[length] = '\0';
-            //printf("%s\n",string);
             int bytes_send = send_msg(socket, string, length-1);
-            //printf("bytes enviados: %d\n", bytes_send);
             length = 0;
             write(1,"you: ", 5);
         }
     }
+    close(socket);
     pthread_exit(0);
 }
 
@@ -137,33 +158,32 @@ int main(int argc, char* argv[]){
         return EXIT_FAILURE;
     }
     
+    struct sigaction hand;
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGUSR1);
+    sigprocmask(SIG_SETMASK,&mask,NULL);
+
     configure_sigusr1_handler();
 
-    struct sockaddr_in sa_r; // IPv4
-    memset(&sa_r, 0, sizeof(sa_r));
-
-    inet_pton(AF_INET, argv[2], &(sa_r.sin_addr));
-    sa_r.sin_family = AF_INET;
-    sa_r.sin_port = htons(atoi(argv[3]));
-    int socket_in = connect_socket(&sa_r, argv[1]);
-    if (socket_in<0) return EXIT_FAILURE;
-
-    sa_r.sin_port = htons(atoi(argv[4]));
-    int socket_out = connect_socket(&sa_r, argv[1]);
-    if (socket_out<0) return EXIT_FAILURE;
+    info_con_t irecv, isend; // IPv4
+    configure_info_con(&irecv, argv[1], argv[2], argv[3]);
+    configure_info_con(&isend, argv[1], argv[2], argv[4]);
 
     pthread_t tid1,tid2;
-    pthread_create(&tid1, NULL, sending, (void *)(intptr_t)socket_in);
-    pthread_create(&tid2, NULL, reading, (void *)(intptr_t)socket_out);
+    pthread_create(&tid1, NULL, send_thread, (void *) &irecv);
+    pthread_create(&tid2, NULL, recieve_thread, (void *) &isend);
     
-    sigset_t mask;
+
     sigfillset(&mask);
     sigdelset(&mask, SIGUSR1);
     sigsuspend(&mask);
     
     printf("\ncerrando cliente\n");
-    close(socket_in);
-    close(socket_out);
+
+    pthread_join(tid1,NULL);
+    pthread_join(tid2,NULL);
+
     return EXIT_SUCCESS;
 
 }
