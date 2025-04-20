@@ -30,12 +30,14 @@
 
 typedef struct{
     pthread_t id;
+    int active;
     char username[BUFFER];
     int fd_in;
     int fd_out;
 }client_t; 
 
 client_t clientes[MAX_CLIENTS];
+
 int n_clients=0;
 pthread_mutex_t clientes_mutex;
 int running = 1;
@@ -43,6 +45,14 @@ int running = 1;
 void * handle_client(void * index);
 void sigusr2_handler(int sig);
 
+
+void init_clients(client_t * clients, int n) {
+    for (int i = 0; i<n; i++) {
+        clients[i].active = -1;
+        clients[i].fd_in = -1;
+        clients[i].fd_out = -1;
+    }
+}
 
 int create_listening_socket(int port) {
     int sockfd;
@@ -137,13 +147,13 @@ int read_msg(int fd, char * text, int timeout) {
 }
 
 int ready_client(int p) {
-    return clientes[p].fd_out > 0 && clientes[p].fd_in > 0 && clientes[p].username != NULL && clientes[p].id == 0;
+    return clientes[p].fd_out != -1 && clientes[p].fd_in != -1 && clientes[p].active <= 0;
 }
 
 void handle_socket_connection(int fd, int is_recv) {
     char username[BUFFER];
     int length = read_msg(fd, username,1000);
-    if ( length == -1) {
+    if ( length <= 0) {
         perror("error en recepcion de usuario\n");
         close(fd);
         return;
@@ -157,9 +167,10 @@ void handle_socket_connection(int fd, int is_recv) {
         strcpy(cl->username, username);
         if (is_recv) cl->fd_in = fd;
         else cl->fd_out = fd;
-        pthread_mutex_unlock(&clientes_mutex);
         n_clients++;
+        pthread_mutex_unlock(&clientes_mutex);
     } else if (p >= 0){  // add socket to existing client
+        
         pthread_mutex_lock(&clientes_mutex);
         if (is_recv) clientes[p].fd_in = fd;
         else clientes[p].fd_out = fd;
@@ -188,36 +199,41 @@ int send_msg(int fd, const char* msg, int length) {
 }
 void broadcast_message(client_t* orig, const char* msg, int length) {
 
-
-    pthread_mutex_lock(&clientes_mutex);
     for (int i=0;i<MAX_CLIENTS; i++){
-        if (clientes[i].id != 0 && &clientes[i] != orig){
+        if (clientes[i].active > 0 && &clientes[i] != orig){
                 send_msg(clientes[i].fd_out, msg, length);
             }
     }
-    pthread_mutex_unlock(&clientes_mutex);
-
 }
 
-void close_client(client_t * cl){
+void disconnect_client(client_t * cl){
     printf("%s se desconecta\n", cl->username);
     pthread_mutex_lock(&clientes_mutex);
-    if (cl->fd_in>0) close(cl->fd_in);
-    if (cl->fd_out>0) close(cl->fd_out);
-    cl->username[0] = '\0';
-    cl->id = 0;
+    if (cl->fd_in>0) {
+        close(cl->fd_in);
+        cl->fd_in = -1;
+    }
+    if (cl->fd_out>0) {
+        close(cl->fd_out);
+        cl->fd_out = -1;
+    }
+    cl->active = 0;
+    *cl->username = '\0';
+    n_clients--;
     pthread_mutex_unlock(&clientes_mutex);
 }
 
 void * handle_client(void * arg){
     client_t * cl = (client_t *) arg;
+    pthread_mutex_lock(&clientes_mutex);
+    cl->active = 1;
+    pthread_mutex_unlock(&clientes_mutex);
     printf("Nuevo cliente: %s\n", cl->username);
-    int fd_in = ((client_t *) cl)->fd_in;
     while (running){
         char msg[BUFFER];
-        int msg_len = read_msg(fd_in, msg, -1);
+        int msg_len = read_msg(cl->fd_in, msg, 2000);
         if (msg_len==0) {
-            close_client(cl);
+            disconnect_client(cl);
             pthread_exit(0);
         }
         if (msg_len>0) {
@@ -227,6 +243,8 @@ void * handle_client(void * arg){
             broadcast_message(cl, msg2,strlen(msg2));
         }
     }
+    close(cl->fd_in);
+    close(cl->fd_out);
     pthread_exit(0);
 }
 
@@ -238,6 +256,7 @@ int main(int argc, char** argv) {
     }
     
     configure_sigusr2_handler();
+    init_clients(clientes, MAX_CLIENTS);
     int socket_in = create_listening_socket(atoi(argv[1]));
     int socket_out = create_listening_socket(atoi(argv[2]));
     struct pollfd fds[2];
@@ -266,8 +285,9 @@ int main(int argc, char** argv) {
     close(socket_in);
     close(socket_out);
     for (int i=0;i<MAX_CLIENTS; i++){
-        if (clientes[i].fd_in>0) close(clientes[i].fd_in);
-        if (clientes[i].fd_out>0) close(clientes[i].fd_out);
+        if (clientes[i].active != -1) pthread_join(clientes[i].id, NULL);
+        if (clientes[i].fd_in != -1) close(clientes[i].fd_in);
+        if (clientes[i].fd_out != -1) close(clientes[i].fd_out);
     }
     return (EXIT_SUCCESS);
 }

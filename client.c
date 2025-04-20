@@ -112,7 +112,7 @@ void * recieve_thread (void* arg) {
     }
     while(running) {
         char msg[(2*BUFFER+1)];
-        int length = read_msg(socket, msg, -1);
+        int length = read_msg(socket, msg, 2000); // timeout in case connection is closed by sigusr1 but not by the server
         if (length==0) {
             printf("Conexion terminada\n");
             kill(getpid(), SIGUSR1);
@@ -141,7 +141,7 @@ void * send_thread (void* arg) {
     int length = 0;
     write(1,"you: ", 5);
     while(running) {
-        string[length++] = getchar();
+        string[length++] = getchar(); // blocks until '\n' is typed
         if (string[length-1] == '\n' && length>1) {
             int bytes_send = send_msg(socket, string, length-1);
             length = 0;
@@ -167,19 +167,19 @@ int main(int argc, char* argv[]){
     configure_sigusr1_handler();
 
     info_con_t irecv, isend; // IPv4
-    configure_info_con(&irecv, argv[1], argv[2], argv[3]);
-    configure_info_con(&isend, argv[1], argv[2], argv[4]);
+    configure_info_con(&isend, argv[1], argv[2], argv[3]);
+    configure_info_con(&irecv, argv[1], argv[2], argv[4]);
 
     pthread_t tid1,tid2;
-    pthread_create(&tid1, NULL, send_thread, (void *) &irecv);
-    pthread_create(&tid2, NULL, recieve_thread, (void *) &isend);
+    pthread_create(&tid1, NULL, send_thread, (void *) &isend);
+    pthread_create(&tid2, NULL, recieve_thread, (void *) &irecv);
     
 
     sigfillset(&mask);
     sigdelset(&mask, SIGUSR1);
     sigsuspend(&mask);
     
-    printf("\ncerrando cliente\n");
+    printf("\ncerrando cliente\n(presionar ENTER para continuar)\n");
 
     pthread_join(tid1,NULL);
     pthread_join(tid2,NULL);
