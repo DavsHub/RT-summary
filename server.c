@@ -23,6 +23,8 @@
 #include <sys/socket.h>
 #include <signal.h>
 #include <pthread.h>
+#include <sys/eventfd.h>
+
 
 #define MAX_CLIENTS 100
 #define BUFFER 1024
@@ -37,10 +39,12 @@ typedef struct{
 }client_t; 
 
 client_t clientes[MAX_CLIENTS];
+pthread_mutex_t clientes_mutex;
 
 int n_clients=0;
-pthread_mutex_t clientes_mutex;
 int running = 1;
+
+
 
 void * handle_client(void * index);
 void sigusr2_handler(int sig);
@@ -254,7 +258,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Usage: %s <port-in> <port-out>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
-    
+
     configure_sigusr2_handler();
     init_clients(clientes, MAX_CLIENTS);
     int socket_in = create_listening_socket(atoi(argv[1]));
@@ -272,13 +276,12 @@ int main(int argc, char** argv) {
     struct sockaddr_in sa_r;
     socklen_t addr_len = sizeof(sa_r);
     while(running) {
-        if (poll(fds,2,-1)>0) {
+        if (poll(fds,2, 2000)>0) { // timeout added in case sigusr2 signal is send to another thread (alternative: use an eventfd to wake up)
             int fd_in = accept(socket_in, (struct sockaddr*) &sa_r, &addr_len);
             if (fd_in >= 0) handle_socket_connection(fd_in,1);
 
             int fd_out = accept(socket_out, (struct sockaddr*) &sa_r, &addr_len);
             if (fd_out >= 0) handle_socket_connection(fd_out,0);
-
         }
     }
     printf("Cerrando servidor\n");
