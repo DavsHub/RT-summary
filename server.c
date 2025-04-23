@@ -43,7 +43,7 @@ pthread_mutex_t clientes_mutex;
 
 int n_clients=0;
 int running = 1;
-
+int sigusr_eventfd = -1;
 
 
 void * handle_client(void * index);
@@ -92,8 +92,10 @@ int create_listening_socket(int port) {
     return sockfd;
 }
 
-void sigusr2_handler(int sig){
-    running=0; // RECIBIR SIGURS2 === DEJAR DE ACEPTAR CLIENTES
+void sigusr_handler(int sig){
+    running=0; // flag to exit the loops
+    uint64_t u = 1;
+    write(sigusr_eventfd, &u, sizeof(uint64_t)); //stop waiting at poll
 }
 
 void configure_sigusr2_handler() {
@@ -102,7 +104,7 @@ void configure_sigusr2_handler() {
     sigemptyset(&mask);
     hand.sa_mask = mask;
     hand.sa_flags = 0;
-    hand.sa_handler = sigusr2_handler;
+    hand.sa_handler = sigusr_handler;
     sigaction(SIGUSR2, &hand, NULL);
 }
 
@@ -117,15 +119,19 @@ int find_username(char * username) {
     return p;
 }
 
-int read_msg(int fd, char * text, int timeout) {
-    struct pollfd pfd;
-    pfd.fd = fd;
-    pfd.events = POLLIN;
+int read_msg(int fd, char ** text, int timeout) {
+    struct pollfd pfd[2];
+    pfd[0].fd = fd;
+    pfd[0].events = POLLIN;
+    pfd[1].fd = sigusr_eventfd;
+    pfd[1].events = POLLIN;
     int msg_len;
     int bytes_rem = sizeof(msg_len);
     while (bytes_rem>0){
-        //printf("waiting message\n");
-        if (poll(&pfd,1,timeout)>0) {
+        if (poll(pfd,2,timeout)>0) {
+            if (pfd[1].revents & POLLIN) {
+                return -1;
+            }
             int bytes_read = read(fd, ((char*)&msg_len) + (sizeof(msg_len) - bytes_rem), bytes_rem);
             if (bytes_read <= 0) return bytes_read;
             bytes_rem -= bytes_read;
@@ -137,16 +143,29 @@ int read_msg(int fd, char * text, int timeout) {
     msg_len = ntohl(msg_len);
     if (msg_len<=0 || msg_len >BUFFER) return -1;
 
+    *text = malloc(msg_len+1);
+    if (*text == NULL){
+        perror("Malloc failed");
+        return -1;
+    }
+
     bytes_rem = msg_len;
     while (bytes_rem>0){
-        if (poll(&pfd,1,timeout)>0) {
-            int bytes_read = read(fd, text + (msg_len - bytes_rem), bytes_rem);
-            if (bytes_read <= 0) return bytes_read;
+        if (poll(pfd,2,timeout)>0) {
+            if (pfd[1].revents & POLLIN) {
+                return -1;
+            }
+            int bytes_read = read(fd, *text + (msg_len - bytes_rem), bytes_rem);
+            if (bytes_read <= 0) {
+                free(*text);
+                return bytes_read;
+            }
             bytes_rem -= bytes_read;
         } else {
             return -1;
         }
     }
+    (*text)[msg_len]='\0';
     return msg_len;
 }
 
@@ -155,14 +174,13 @@ int ready_client(int p) {
 }
 
 void handle_socket_connection(int fd, int is_recv) {
-    char username[BUFFER];
-    int length = read_msg(fd, username,1000);
-    if ( length <= 0) {
+    char *username;
+    int length = read_msg(fd, &username,1000);
+    if ( length <= 0|| length+1>BUFFER) {
         perror("error en recepcion de usuario\n");
         close(fd);
         return;
     }
-    username[length] = '\0';
 
     int p = find_username(username);
     if (p==-1 && n_clients<MAX_CLIENTS) {  // new client
@@ -234,21 +252,22 @@ void * handle_client(void * arg){
     pthread_mutex_unlock(&clientes_mutex);
     printf("Nuevo cliente: %s\n", cl->username);
     while (running){
-        char msg[BUFFER];
-        int msg_len = read_msg(cl->fd_in, msg, 2000);
+        char *msg = NULL;
+        int msg_len = read_msg(cl->fd_in, &msg, -1);
         if (msg_len==0) {
-            disconnect_client(cl);
-            pthread_exit(0);
+            break;
         }
+        
         if (msg_len>0) {
-            char msg2[2*BUFFER+1];
-            sprintf(msg2, "%s: %.*s", cl->username, msg_len, msg);
+            char *msg2 = malloc(msg_len+BUFFER+2);
+            sprintf(msg2, "%s: %s", cl->username, msg);
             printf("%s\n",msg2);
             broadcast_message(cl, msg2,strlen(msg2));
+            free(msg2);
         }
+        if (msg != NULL) free(msg);
     }
-    close(cl->fd_in);
-    close(cl->fd_out);
+    disconnect_client(cl);
     pthread_exit(0);
 }
 
@@ -258,17 +277,19 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Usage: %s <port-in> <port-out>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
-
+    sigusr_eventfd = eventfd(0,0);
     configure_sigusr2_handler();
     init_clients(clientes, MAX_CLIENTS);
     int socket_in = create_listening_socket(atoi(argv[1]));
     int socket_out = create_listening_socket(atoi(argv[2]));
-    struct pollfd fds[2];
 
+    struct pollfd fds[3];
     fds[0].fd = socket_in;
     fds[0].events = POLLIN;
     fds[1].fd = socket_out;
     fds[1].events = POLLIN;
+    fds[2].fd = sigusr_eventfd;
+    fds[2].events = POLLIN;
 
     fcntl(socket_in, F_SETFL, O_NONBLOCK);
     fcntl(socket_out, F_SETFL, O_NONBLOCK);
@@ -276,12 +297,13 @@ int main(int argc, char** argv) {
     struct sockaddr_in sa_r;
     socklen_t addr_len = sizeof(sa_r);
     while(running) {
-        if (poll(fds,2, 2000)>0) { // timeout added in case sigusr2 signal is send to another thread (alternative: use an eventfd to wake up)
+        if (poll(fds,3, -1)>0) {
             int fd_in = accept(socket_in, (struct sockaddr*) &sa_r, &addr_len);
             if (fd_in >= 0) handle_socket_connection(fd_in,1);
 
             int fd_out = accept(socket_out, (struct sockaddr*) &sa_r, &addr_len);
             if (fd_out >= 0) handle_socket_connection(fd_out,0);
+            
         }
     }
     printf("Cerrando servidor\n");

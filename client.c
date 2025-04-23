@@ -13,6 +13,7 @@
 
 int in_add, out_add;
 int running = 1;
+int sigusr_eventfd = -1;
 
 typedef struct {
     struct sockaddr_in sa;
@@ -27,8 +28,10 @@ void configure_info_con(info_con_t * info, char * username, char * ip, char * po
     info->username = username;
 }
 
-void sigusr1_handler(int sig){
-    running=0;
+void sigusr_handler(int sig){
+    running=0; // flag to exit the loops
+    uint64_t u = 1;
+    write(sigusr_eventfd, &u, sizeof(uint64_t)); //stop waiting at polls
 }
 
 void configure_sigusr1_handler() {
@@ -37,7 +40,7 @@ void configure_sigusr1_handler() {
     sigemptyset(&mask);
     hand.sa_mask = mask;
     hand.sa_flags = 0;
-    hand.sa_handler = sigusr1_handler;
+    hand.sa_handler = sigusr_handler;
     sigaction(SIGUSR1, &hand, NULL);
 }
 
@@ -55,34 +58,53 @@ int send_msg(int fd, const char* msg, int length) {
     return bytes_sent;
 }
 
-int read_msg(int fd, char * text, int timeout) {
-    struct pollfd pfd;
-    pfd.fd = fd;
-    pfd.events = POLLIN;
+int read_msg(int fd, char ** text, int timeout) {
+    struct pollfd pfd[2];
+    pfd[0].fd = fd;
+    pfd[0].events = POLLIN;
+    pfd[1].fd = sigusr_eventfd;
+    pfd[1].events = POLLIN;
     int msg_len;
     int bytes_rem = sizeof(msg_len);
     while (bytes_rem>0){
-        if (poll(&pfd,1,timeout)>0) {
+        if (poll(pfd,2,timeout)>0) {
+            if (pfd[1].revents & POLLIN) {
+                return -1;
+            }
             int bytes_read = read(fd, ((char*)&msg_len) + (sizeof(msg_len) - bytes_rem), bytes_rem);
             if (bytes_read <= 0) return bytes_read;
             bytes_rem -= bytes_read;
+            //printf("received %d bytes\n", bytes_read);
         } else {
             return -1;
         }
     }
     msg_len = ntohl(msg_len);
-    if (msg_len<=0 || msg_len >(2*BUFFER+1)) return -1;
+    if (msg_len<=0 || msg_len >BUFFER) return -1;
+
+    *text = malloc(msg_len+1);
+    if (*text == NULL){
+        perror("Malloc failed");
+        return -1;
+    }
 
     bytes_rem = msg_len;
     while (bytes_rem>0){
-        if (poll(&pfd,1,timeout)>0) {
-            int bytes_read = read(fd, text + (msg_len - bytes_rem), bytes_rem);
-            if (bytes_read <= 0) return bytes_read;
+        if (poll(pfd,2,timeout)>0) {
+            if (pfd[1].revents & POLLIN) {
+                return -1;
+            }
+            int bytes_read = read(fd, *text + (msg_len - bytes_rem), bytes_rem);
+            if (bytes_read <= 0) {
+                free(*text);
+                return bytes_read;
+            }
             bytes_rem -= bytes_read;
         } else {
             return -1;
         }
     }
+    (*text)[msg_len]='\0';
     return msg_len;
 }
 
@@ -111,10 +133,10 @@ void * recieve_thread (void* arg) {
         pthread_exit(0);
     }
     while(running) {
-        char msg[(2*BUFFER+1)];
-        int length = read_msg(socket, msg, 2000); // timeout in case connection is closed by sigusr1 but not by the server
+        char * msg = NULL;
+        int length = read_msg(socket, &msg, -1); // timeout in case connection is closed by sigusr1 but not by the server
         if (length==0) {
-            printf("Conexion terminada\n");
+            printf("\nTerminated connection\n");
             kill(getpid(), SIGUSR1);
             break;
         }
@@ -123,7 +145,9 @@ void * recieve_thread (void* arg) {
             write(1,msg, length);
             write(1,"\nyou:", 6);
         }
+        if (msg != NULL) free(msg);
     }
+    
     close(socket);
     pthread_exit(0);
 }
