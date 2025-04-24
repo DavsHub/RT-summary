@@ -141,7 +141,7 @@ int read_msg(int fd, char ** text, int timeout) {
         }
     }
     msg_len = ntohl(msg_len);
-    if (msg_len<=0 || msg_len >BUFFER) return -1;
+    if (msg_len<=0) return -1;
 
     *text = malloc(msg_len+1);
     if (*text == NULL){

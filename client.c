@@ -9,7 +9,8 @@
 #include <arpa/inet.h>
 #include <poll.h>
 #include <stdint.h>
-#define BUFFER 1024
+
+#define INITIAL_SIZE 128
 
 int in_add, out_add;
 int running = 1;
@@ -80,7 +81,7 @@ int read_msg(int fd, char ** text, int timeout) {
         }
     }
     msg_len = ntohl(msg_len);
-    if (msg_len<=0 || msg_len >BUFFER) return -1;
+    if (msg_len<=0) return -1;
 
     *text = malloc(msg_len+1);
     if (*text == NULL){
@@ -161,17 +162,35 @@ void * send_thread (void* arg) {
         close(socket);
         pthread_exit(0);
     }
-    char string[BUFFER];
+    char *string = malloc(INITIAL_SIZE);
+    if (string == NULL) {
+        kill(getpid(), SIGUSR1);
+        close(socket);
+        pthread_exit(0);
+    }
+
+    int capacity = INITIAL_SIZE;
     int length = 0;
     write(1,"you: ", 5);
     while(running) {
-        string[length++] = getchar(); // blocks until '\n' is typed
+        char ch = getchar();
+        if (length + 1 >= capacity) {
+            capacity *= 2;
+            char *new_string = realloc(string, capacity);
+            if (new_string == NULL) {
+                kill(getpid(), SIGUSR1);
+                perror("realloc failed");
+            }
+            string = new_string;
+        }
+        string[length++] = ch; // blocks until '\n' is typed
         if (string[length-1] == '\n' && length>1) {
             int bytes_send = send_msg(socket, string, length-1);
             length = 0;
             write(1,"you: ", 5);
         }
     }
+    free(string);
     close(socket);
     pthread_exit(0);
 }
